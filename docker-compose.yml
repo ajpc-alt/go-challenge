@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:17.5
+    environment:
+      POSTGRES_PASSWORD: password
+      POSTGRES_USER: postgres
+      POSTGRES_DB: challenge
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: pg_isready
+      interval: 5s
+      timeout: 5s
+      retries: 5
