@@ -1,6 +1,8 @@
 package models
 
 import (
+	"context"
+
 	"gorm.io/gorm"
 )
 
@@ -14,10 +16,14 @@ func NewProductsRepository(db *gorm.DB) *ProductsRepository {
 	}
 }
 
-func (r *ProductsRepository) GetAllProducts() ([]Product, error) {
+// List returns every product in the catalog. Variants are left out: the catalog
+// listing does not expose them, and preloading them costs one extra query and a
+// row per variant.
+func (r *ProductsRepository) List(ctx context.Context) ([]Product, error) {
 	var products []Product
-	if err := r.db.Preload("Variants").Find(&products).Error; err != nil {
+	if err := r.db.WithContext(ctx).Find(&products).Error; err != nil {
 		return nil, err
 	}
+
 	return products, nil
 }

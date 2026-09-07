@@ -1,11 +1,20 @@
 package catalog
 
 import (
-	"encoding/json"
+	"context"
+	"log"
 	"net/http"
 
+	"github.com/mytheresa/go-hiring-challenge/app/api"
 	"github.com/mytheresa/go-hiring-challenge/models"
 )
+
+// ProductsRepository is the slice of the products storage the catalog needs.
+// It is declared on the consumer side so the handler can be exercised with a
+// fake, without reaching for a database.
+type ProductsRepository interface {
+	List(ctx context.Context) ([]models.Product, error)
+}
 
 type Response struct {
 	Products []Product `json:"products"`
@@ -17,40 +26,37 @@ type Product struct {
 }
 
 type CatalogHandler struct {
-	repo *models.ProductsRepository
+	repo ProductsRepository
 }
 
-func NewCatalogHandler(r *models.ProductsRepository) *CatalogHandler {
+func NewCatalogHandler(r ProductsRepository) *CatalogHandler {
 	return &CatalogHandler{
 		repo: r,
 	}
 }
 
 func (h *CatalogHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
-	res, err := h.repo.GetAllProducts()
+	products, err := h.repo.List(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		// The underlying error can name tables and columns, so it is logged
+		// rather than handed to the client.
+		log.Printf("catalog: listing products failed: %s", err)
+		api.ErrorResponse(w, http.StatusInternalServerError, "could not retrieve the catalog")
 		return
 	}
 
-	// Map response
-	products := make([]Product, len(res))
-	for i, p := range res {
-		products[i] = Product{
+	api.OKResponse(w, Response{Products: newProducts(products)})
+}
+
+// newProducts maps stored products onto their API representation.
+func newProducts(products []models.Product) []Product {
+	res := make([]Product, 0, len(products))
+	for _, p := range products {
+		res = append(res, Product{
 			Code:  p.Code,
 			Price: p.Price.InexactFloat64(),
-		}
+		})
 	}
 
-	// Return the products as a JSON response
-	w.Header().Set("Content-Type", "application/json")
-
-	response := Response{
-		Products: products,
-	}
-
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	return res
 }
