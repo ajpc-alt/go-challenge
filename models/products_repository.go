@@ -3,8 +3,20 @@ package models
 import (
 	"context"
 
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
+
+// ProductFilter narrows and pages a catalog listing. The zero value lists the
+// whole catalog from the beginning; Limit is expected to be set by the caller.
+type ProductFilter struct {
+	Offset int
+	Limit  int
+	// Category is a category code. Empty means no category filter.
+	Category string
+	// PriceLessThan is an exclusive upper bound. Nil means no price filter.
+	PriceLessThan *decimal.Decimal
+}
 
 type ProductsRepository struct {
 	db *gorm.DB
@@ -16,14 +28,44 @@ func NewProductsRepository(db *gorm.DB) *ProductsRepository {
 	}
 }
 
-// List returns every product in the catalog. Variants are left out: the catalog
-// listing does not expose them, and preloading them costs one extra query and a
-// row per variant.
-func (r *ProductsRepository) List(ctx context.Context) ([]Product, error) {
-	var products []Product
-	if err := r.db.WithContext(ctx).Find(&products).Error; err != nil {
-		return nil, err
+// List returns a page of the catalog along with the total number of products
+// matching the filter, which is what pagination has to be built on: the page
+// itself only says how many rows fit in it.
+//
+// Variants are left out: the catalog listing does not expose them, and
+// preloading them costs one extra query and a row per variant.
+func (r *ProductsRepository) List(ctx context.Context, f ProductFilter) ([]Product, int64, error) {
+	// Joins loads the category in the same query, unlike Preload, which would
+	// issue a second one. Session makes the built query reusable, so the count
+	// and the page can share it without carrying state over.
+	q := r.db.WithContext(ctx).
+		Model(&Product{}).
+		Joins("Category").
+		Session(&gorm.Session{})
+
+	if f.Category != "" {
+		// The alias GORM gives the joined table is quoted, so it has to be
+		// quoted here too: unquoted, Postgres would fold it to lowercase.
+		q = q.Where(`"Category".code = ?`, f.Category)
 	}
 
-	return products, nil
+	if f.PriceLessThan != nil {
+		q = q.Where("products.price < ?", *f.PriceLessThan)
+	}
+
+	// Counted before the page is cut out, so the total covers the filter and
+	// not just the rows that survived LIMIT/OFFSET.
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// Without an explicit ORDER BY, Postgres promises no particular order, and
+	// paging over it could repeat or skip rows between pages.
+	var products []Product
+	if err := q.Order("products.id").Offset(f.Offset).Limit(f.Limit).Find(&products).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return products, total, nil
 }
