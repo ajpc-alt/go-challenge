@@ -25,6 +25,7 @@ const (
 // fake, without reaching for a database.
 type ProductsRepository interface {
 	List(ctx context.Context, f models.ProductFilter) ([]models.Product, int64, error)
+	FindByCode(ctx context.Context, code string) (*models.Product, error)
 }
 
 type Response struct {
@@ -43,6 +44,19 @@ type Product struct {
 type Category struct {
 	Code string `json:"code"`
 	Name string `json:"name"`
+}
+
+// ProductDetails is a catalog product plus the variants only the detail
+// endpoint exposes.
+type ProductDetails struct {
+	Product
+	Variants []Variant `json:"variants"`
+}
+
+type Variant struct {
+	Name  string  `json:"name"`
+	SKU   string  `json:"sku"`
+	Price float64 `json:"price"`
 }
 
 // Pagination tells the client where the page sits and how much there is to page
@@ -90,6 +104,22 @@ func (h *CatalogHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *CatalogHandler) HandleGetByCode(w http.ResponseWriter, r *http.Request) {
+	product, err := h.repo.FindByCode(r.Context(), r.PathValue("code"))
+
+	switch {
+	case errors.Is(err, models.ErrNotFound):
+		api.ErrorResponse(w, http.StatusNotFound, "product not found")
+		return
+	case err != nil:
+		log.Printf("catalog: fetching product failed: %s", err)
+		api.ErrorResponse(w, http.StatusInternalServerError, "could not retrieve the product")
+		return
+	}
+
+	api.OKResponse(w, newProductDetails(*product))
+}
+
 // parseFilter reads the listing parameters off the query string. A missing
 // parameter falls back to its default, while one that cannot be parsed is a
 // client mistake and is reported as such rather than silently ignored.
@@ -134,13 +164,46 @@ func parseFilter(q url.Values) (models.ProductFilter, error) {
 func newProducts(products []models.Product) []Product {
 	res := make([]Product, 0, len(products))
 	for _, p := range products {
-		res = append(res, Product{
-			Code:  p.Code,
-			Price: p.Price.InexactFloat64(),
-			Category: Category{
-				Code: p.Category.Code,
-				Name: p.Category.Name,
-			},
+		res = append(res, newProduct(p))
+	}
+
+	return res
+}
+
+func newProduct(p models.Product) Product {
+	return Product{
+		Code:  p.Code,
+		Price: p.Price.InexactFloat64(),
+		Category: Category{
+			Code: p.Category.Code,
+			Name: p.Category.Name,
+		},
+	}
+}
+
+func newProductDetails(p models.Product) ProductDetails {
+	return ProductDetails{
+		Product:  newProduct(p),
+		Variants: newVariants(p),
+	}
+}
+
+// newVariants maps a product's variants, resolving the price of the ones that
+// do not carry their own.
+func newVariants(p models.Product) []Variant {
+	res := make([]Variant, 0, len(p.Variants))
+	for _, v := range p.Variants {
+		// A variant without a price of its own inherits the product's. The
+		// pointer is what keeps that case apart from a genuine 0.00.
+		price := p.Price
+		if v.Price != nil {
+			price = *v.Price
+		}
+
+		res = append(res, Variant{
+			Name:  v.Name,
+			SKU:   v.SKU,
+			Price: price.InexactFloat64(),
 		})
 	}
 

@@ -2,6 +2,7 @@ package models
 
 import (
 	"context"
+	"errors"
 
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -68,4 +69,30 @@ func (r *ProductsRepository) List(ctx context.Context, f ProductFilter) ([]Produ
 	}
 
 	return products, total, nil
+}
+
+// FindByCode returns a single product with its category and its variants. It
+// reports ErrNotFound when the code matches nothing, so the caller can tell that
+// apart from a genuine failure without knowing about GORM.
+func (r *ProductsRepository) FindByCode(ctx context.Context, code string) (*Product, error) {
+	var product Product
+
+	// Variants are preloaded here, unlike in List: the detail response does
+	// expose them. They are ordered by id so the response is stable.
+	err := r.db.WithContext(ctx).
+		Joins("Category").
+		Preload("Variants", func(db *gorm.DB) *gorm.DB {
+			return db.Order("product_variants.id")
+		}).
+		Where("products.code = ?", code).
+		First(&product).Error
+
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return nil, ErrNotFound
+	case err != nil:
+		return nil, err
+	}
+
+	return &product, nil
 }
