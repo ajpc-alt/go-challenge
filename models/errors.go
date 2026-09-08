@@ -2,6 +2,11 @@ package models
 
 import "errors"
 
-// ErrNotFound is what repositories report when a lookup matches nothing. It
-// keeps GORM's own sentinel from leaking into the handlers.
-var ErrNotFound = errors.New("not found")
+var (
+	// ErrNotFound is what repositories report when a lookup matches nothing.
+	ErrNotFound = errors.New("not found")
+
+	// ErrDuplicate is what they report when a write collides with a unique
+	// constraint.
+	ErrDuplicate = errors.New("duplicate")
+)
